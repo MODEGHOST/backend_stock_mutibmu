@@ -235,3 +235,39 @@ export async function setUserRoles(
     return { ok: true };
   });
 }
+
+export async function resetUserPassword(
+  companyId,
+  actorUserId,
+  targetUserId,
+  newPassword,
+) {
+  return await withTx(async (conn) => {
+    const [u] = await conn.query(
+      `SELECT id, company_id FROM users WHERE id=:id LIMIT 1 FOR UPDATE`,
+      { id: targetUserId },
+    );
+    if (!u.length) throw new HttpError(404, "User not found");
+    if (Number(u[0].company_id) !== Number(companyId))
+      throw new HttpError(403, "Forbidden");
+
+    const password_hash = await bcrypt.hash(newPassword, 10);
+
+    await conn.query(
+      `
+      UPDATE users
+      SET
+        password_hash = :password_hash,
+        updated_at = NOW()
+      WHERE id=:id AND company_id=:companyId
+      `,
+      {
+        id: targetUserId,
+        companyId,
+        password_hash,
+      },
+    );
+
+    return { ok: true };
+  });
+}

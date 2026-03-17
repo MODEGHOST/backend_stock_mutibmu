@@ -7,6 +7,7 @@ import {
   createCompanyUser,
   updateCompanyUser,
   setUserRoles,
+  resetUserPassword,
 } from "../services/adminUsers.service.js";
 
 const router = Router();
@@ -103,6 +104,28 @@ router.put(
       }).strict().parse(req.body);
 
       res.json(await setUserRoles(companyId, req.user.sub, id, body.role_ids));
+    } catch (e) {
+      next(e);
+    }
+  }
+);
+
+router.put(
+  "/users/:id/reset-password",
+  auth,
+  requirePermission("master.user.manage"),
+  async (req, res, next) => {
+    try {
+      const companyId = req.user.company_id;
+      if (!companyId) return res.status(400).json({ message: "company_id required" });
+
+      const id = Number(req.params.id);
+
+      const body = z.object({
+        password: z.string().min(6),
+      }).strict().parse(req.body);
+
+      res.json(await resetUserPassword(companyId, req.user.sub, id, body.password));
     } catch (e) {
       next(e);
     }
