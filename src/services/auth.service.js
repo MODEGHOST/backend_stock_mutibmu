@@ -28,7 +28,7 @@ function makeRefreshPlain() {
 }
 
 function verifyRefreshPlain(token) {
-  const idx = token.lastIndexOf(".");
+  const idx = token.indexOf(".");
   if (idx <= 0) throw new Error("bad token");
   const raw = token.slice(0, idx);
   const sig = token.slice(idx + 1);
