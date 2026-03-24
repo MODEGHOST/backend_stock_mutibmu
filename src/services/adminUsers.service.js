@@ -14,7 +14,26 @@ export async function listCompanyUsers(companyId, { q, limit, offset }) {
     FROM users
     WHERE company_id = :companyId
       AND (:kw IS NULL OR email LIKE :kw OR first_name LIKE :kw OR last_name LIKE :kw)
-    ORDER BY id DESC
+    ORDER BY 
+      (
+        SELECT CASE r.code 
+          WHEN 'system_owner' THEN 1
+          WHEN 'company_owner' THEN 2
+          WHEN 'company_admin' THEN 3
+          WHEN 'company_manage' THEN 4
+          WHEN 'company_user' THEN 5
+          ELSE 99 
+        END
+        FROM user_roles ur 
+        JOIN roles r ON ur.role_id = r.id 
+        WHERE ur.user_id = users.id 
+        ORDER BY 
+          CASE r.code 
+            WHEN 'system_owner' THEN 1 WHEN 'company_owner' THEN 2 WHEN 'company_admin' THEN 3 WHEN 'company_manage' THEN 4 WHEN 'company_user' THEN 5 ELSE 99 
+          END ASC 
+        LIMIT 1
+      ) ASC,
+      id DESC
     LIMIT :limit OFFSET :offset
     `,
     { companyId, kw, limit, offset },

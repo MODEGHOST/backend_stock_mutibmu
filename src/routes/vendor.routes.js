@@ -131,7 +131,8 @@ router.get("/", auth, requirePermission("master.vendor.manage"), async (req, res
   try {
     const companyId = req.user.company_id;
     if (!companyId) return res.status(400).json({ message: "company_id required" });
-    res.json(await listVendors(companyId));
+    const { q, sortKey, sortOrder, page = 1, limit = 20 } = req.query;
+    res.json(await listVendors(companyId, { q, sortKey, sortOrder, page, limit }));
   } catch (e) {
     next(e);
   }

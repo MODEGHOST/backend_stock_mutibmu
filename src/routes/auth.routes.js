@@ -17,8 +17,23 @@ router.post("/login", async (req, res, next) => {
 
 router.post("/refresh", async (req, res, next) => {
   try {
-    const body = z.object({ refreshToken: z.string().min(10) }).parse(req.body);
-    const out = await refresh(body.refreshToken);
+    const body = z.object({ 
+      refreshToken: z.string().min(10),
+      switchCompanyId: z.any().optional() 
+    }).parse(req.body);
+    const out = await refresh(body.refreshToken, body.switchCompanyId);
+    res.json(out);
+  } catch (e) {
+    next(e);
+  }
+});
+
+router.post("/switch-company", auth, async (req, res, next) => {
+  try {
+    const body = z.object({ targetCompanyId: z.any() }).parse(req.body);
+    // Requires importing switchCompany at the top!
+    const { switchCompany } = await import("../services/auth.service.js");
+    const out = await switchCompany(req.user.sub, body.targetCompanyId);
     res.json(out);
   } catch (e) {
     next(e);

@@ -1,5 +1,6 @@
 import { pool } from "../config/db.js";
 import HttpError from "../utils/httpError.js";
+import { generateDocNo } from "./documentNo.service.js";
 
 /**
  * Get unpaid commissions grouped by seller
@@ -40,6 +41,8 @@ export async function getUnpaidCommissionInvoices(companyId, sellerId, from, to)
       s.invoice_no,
       s.issue_date,
       s.total AS invoice_total,
+      s.cogs_total AS cost_total,
+      (s.total - COALESCE(s.cogs_total, 0)) AS profit_total,
       COALESCE(SUM(si.commission_total), 0) AS commission_total
     FROM sales s
     JOIN sales_items si ON si.sales_id = s.id
@@ -93,7 +96,24 @@ export async function payCommission(companyId, adminId, body) {
       throw new HttpError(400, "ไม่มีรายการค่าคอมมิชชั่นค้างจ่ายในช่วงเวลานี้สำหรับพนักงานคนดังกล่าว หรือบิลที่เลือกจ่ายไปแล้ว");
     }
 
-    const payAmount = totalUnpaid; 
+    let payAmount = totalUnpaid; 
+    let paymentItems = []; // {sale_id, original_amount, paid_amount}
+
+    if (body.items && Array.isArray(body.items) && body.items.length > 0) {
+      payAmount = body.items.reduce((sum, item) => sum + Number(item.paid_amount || 0), 0);
+      paymentItems = body.items;
+    } else {
+      const [invs] = await conn.query(
+        `SELECT s.id as sale_id, COALESCE(SUM(si.commission_total), 0) AS commission_total
+         FROM sales s JOIN sales_items si ON si.sales_id = s.id
+         WHERE ${whereSql} GROUP BY s.id`, queryParams
+      );
+      paymentItems = invs.map(inv => ({ sale_id: inv.sale_id, original_amount: inv.commission_total, paid_amount: inv.commission_total }));
+    }
+
+    if (payAmount <= 0) {
+      throw new HttpError(400, "ยอดเงินที่จ่ายสุทธิต้องมากกว่า 0");
+    }
 
     // 2. Validate Finance Account it belongs to company
     const [finAccs] = await conn.query(
@@ -123,33 +143,51 @@ export async function payCommission(companyId, adminId, body) {
     const periodStart = from || new Date().toISOString().split('T')[0];
     const periodEnd = to || new Date().toISOString().split('T')[0];
 
+    // Generate Document Number
+    const documentNo = await generateDocNo(conn, companyId, "CP", new Date());
+
     const [commPayRes] = await conn.query(
       `
       INSERT INTO commission_payments (
-        company_id, seller_id, period_start, period_end, total_amount, 
+        company_id, document_no, seller_id, period_start, period_end, total_amount, 
         finance_account_id, finance_transaction_id, paid_by, note
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
-      [companyId, seller_id, periodStart, periodEnd, payAmount, finance_account_id, financeTxId, adminId, note]
+      [companyId, documentNo, seller_id, periodStart, periodEnd, payAmount, finance_account_id, financeTxId, adminId, note]
     );
     const commissionPaymentId = commPayRes.insertId;
 
-    // 6. Update sales invoices to mark as paid
-    const [updateRes] = await conn.query(
-      `
-      UPDATE sales s
-      SET s.commission_paid = TRUE, s.commission_payment_id = ? 
-      WHERE ${whereSql}
-      `,
-      [commissionPaymentId, ...queryParams]
-    );
+    // 6. Create commission_payment_items
+    if (paymentItems.length > 0) {
+      const itemsValues = paymentItems.map(item => [
+        commissionPaymentId,
+        item.sale_id,
+        item.original_amount,
+        item.paid_amount
+      ]);
+      await conn.query(
+        `INSERT INTO commission_payment_items (commission_payment_id, sale_id, original_amount, paid_amount) VALUES ?`,
+        [itemsValues]
+      );
+    }
+
+    // 7. Update sales invoices to mark as paid
+    const updateSaleIds = paymentItems.map(item => item.sale_id);
+    let affectedRows = 0;
+    if (updateSaleIds.length > 0) {
+      const [updateRes] = await conn.query(
+        `UPDATE sales s SET s.commission_paid = TRUE, s.commission_payment_id = ? WHERE s.id IN (?) AND s.company_id = ?`,
+        [commissionPaymentId, updateSaleIds, companyId]
+      );
+      affectedRows = updateRes.affectedRows;
+    }
 
     await conn.commit();
     return { 
       success: true, 
       payment_id: commissionPaymentId, 
       amount_paid: payAmount,
-      invoices_updated: updateRes.affectedRows
+      invoices_updated: affectedRows
     };
   } catch (error) {
     await conn.rollback();
@@ -172,7 +210,8 @@ export async function getCommissionPaymentHistory(companyId, limit = 50, offset 
       a.email AS admin_email,
       CONCAT(a.first_name, ' ', a.last_name) AS admin_name,
       fa.name AS finance_account_name,
-      (SELECT COUNT(*) FROM sales s WHERE s.commission_payment_id = cp.id) AS invoice_count
+      (SELECT COUNT(*) FROM sales s WHERE s.commission_payment_id = cp.id) AS invoice_count,
+      IFNULL((SELECT SUM(original_amount) FROM commission_payment_items cpi WHERE cpi.commission_payment_id = cp.id), cp.total_amount) AS original_total
     FROM commission_payments cp
     JOIN users u ON u.id = cp.seller_id
     JOIN users a ON a.id = cp.paid_by
@@ -190,4 +229,27 @@ export async function getCommissionPaymentHistory(companyId, limit = 50, offset 
   );
 
   return { rows, total: countRes[0].total };
+}
+
+/**
+ * Get Commission Payment Statement Items
+ */
+export async function getCommissionPaymentItems(companyId, paymentId) {
+  const [rows] = await pool.query(
+    `
+    SELECT 
+      cpi.*,
+      s.invoice_no,
+      s.issue_date,
+      s.total as invoice_total,
+      s.cogs_total as cost_total,
+      (s.total - COALESCE(s.cogs_total, 0)) as profit_total
+    FROM commission_payment_items cpi
+    JOIN sales s ON s.id = cpi.sale_id
+    WHERE cpi.commission_payment_id = ? AND s.company_id = ?
+    ORDER BY s.issue_date ASC
+    `,
+    [paymentId, companyId]
+  );
+  return { rows };
 }

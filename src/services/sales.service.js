@@ -1,7 +1,7 @@
-// services/sales.service.js
 import { withTx, pool } from "../config/db.js";
 import HttpError from "../utils/httpError.js";
 import { fifoConsume } from "./fifo.service.js";
+import { logAudit } from "./audit.service.js";
 
 function ymFromDate(issue_date) {
   // "2026-02-06" -> "202602"
@@ -403,6 +403,21 @@ export async function createSale(companyId, userId, data) {
       );
     }
 
+    await logAudit({
+      companyId,
+      userId,
+      action: "CREATE",
+      entityType: "INVOICE",
+      entityId: saleId,
+      newValues: {
+        customer_id: data.customer_id,
+        quotation_no: quotationNo,
+        status: actualStatus,
+        subtotal: header.subtotal,
+        total: header.total,
+      }
+    }, conn);
+
     return {
       id: saleId,
       quotation_no: quotationNo,
@@ -790,6 +805,17 @@ export async function cancelSale(companyId, userId, id, reason) {
               stage: sale.status,
             },
           );
+          
+          await logAudit({
+            companyId,
+            userId,
+            action: "CANCEL",
+            entityType: "INVOICE",
+            entityId: id,
+            oldValues: { status: sale.status },
+            newValues: { status: 'CANCELLED', cancel_reason: reason }
+          }, conn);
+
           return { ok: true, stage: sale.status, stockReturned: false };
     }
 
@@ -874,6 +900,16 @@ export async function cancelSale(companyId, userId, id, reason) {
       `,
       { id, companyId, userId, reason, stage: sale.status },
     );
+
+    await logAudit({
+      companyId,
+      userId,
+      action: "CANCEL",
+      entityType: "INVOICE",
+      entityId: id,
+      oldValues: { status: sale.status },
+      newValues: { status: 'CANCELLED', cancel_reason: reason }
+    }, conn);
 
     return { ok: true, stage: sale.status, stockReturned: true };
   });

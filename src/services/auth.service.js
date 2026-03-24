@@ -13,7 +13,7 @@ function sha256(s) {
 
 function signAccess(user) {
   return jwt.sign(
-    { sub: user.id, company_id: user.company_id || null, email: user.email },
+    { sub: user.id, company_id: user.company_id !== undefined ? user.company_id : null, email: user.email },
     env.ACCESS_TOKEN_SECRET,
     { expiresIn: env.ACCESS_TOKEN_EXPIRES }
   );
@@ -102,7 +102,7 @@ export async function login(email, password) {
   return { accessToken, refreshToken: refreshPlain };
 }
 
-export async function refresh(refreshToken) {
+export async function refresh(refreshToken, switchCompanyId = undefined) {
   const token_hash = verifyRefreshPlain(refreshToken);
 
   const [rows] = await pool.query(
@@ -122,7 +122,34 @@ export async function refresh(refreshToken) {
   if (!r.is_active) throw new HttpError(403, "User inactive");
   if (new Date(r.expires_at).getTime() < Date.now()) throw new HttpError(401, "Unauthorized");
 
-  const accessToken = signAccess({ id: r.uid, company_id: r.company_id, email: r.email });
+  let finalCompanyId = r.company_id;
+  if (switchCompanyId !== undefined) {
+    const roles = await getUserRoles(r.uid);
+    if (roles.includes("system_owner")) {
+      finalCompanyId = switchCompanyId === "null" || switchCompanyId === null ? null : Number(switchCompanyId);
+    }
+  }
+
+  const accessToken = signAccess({ id: r.uid, company_id: finalCompanyId, email: r.email });
+  return { accessToken };
+}
+
+export async function switchCompany(userId, targetCompanyId) {
+  const roles = await getUserRoles(userId);
+  if (!roles.includes("system_owner")) {
+    throw new HttpError(403, "Only system owner can switch companies");
+  }
+
+  const [rows] = await pool.query(
+    `SELECT id, company_id, email, is_active FROM users WHERE id = :id LIMIT 1`,
+    { id: userId }
+  );
+  if (rows.length === 0 || !rows[0].is_active) throw new HttpError(403, "User inactive");
+  
+  const u = rows[0];
+  const cId = targetCompanyId === "null" || targetCompanyId === null ? null : Number(targetCompanyId);
+  
+  const accessToken = signAccess({ id: u.id, company_id: cId, email: u.email });
   return { accessToken };
 }
 

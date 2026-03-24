@@ -117,7 +117,29 @@ function normalizeAddress(addr) {
   };
 }
 
-export async function listVendors(companyId) {
+export async function listVendors(companyId, params = {}) {
+  const { q, sortKey, sortOrder, limit = 20, page = 1 } = params;
+
+  let baseQuery = `FROM vendors WHERE company_id = :companyId`;
+  const queryParams = { companyId };
+
+  if (q) {
+    baseQuery += ` AND (code LIKE :q OR name LIKE :q OR tax_id LIKE :q OR phone LIKE :q OR email LIKE :q)`;
+    queryParams.q = `%${q}%`;
+  }
+
+  const [[{ total }]] = await pool.query(`SELECT COUNT(*) as total ${baseQuery}`, queryParams);
+
+  let orderStr = "ORDER BY id DESC";
+  const validSortKeys = ["code", "name", "tax_id", "phone", "email", "is_active", "type"];
+  if (sortKey && validSortKeys.includes(sortKey)) {
+    const dir = sortOrder === "asc" ? "ASC" : "DESC";
+    orderStr = `ORDER BY ${sortKey} ${dir}`;
+  }
+
+  queryParams.limit = Number(limit) || 20;
+  queryParams.offset = (Number(page) - 1) * queryParams.limit;
+
   const [rows] = await pool.query(
     `SELECT id, company_id, type, code, name, tax_id, tax_country,
             office_type, legal_entity_type, legal_form, business_name,
@@ -125,12 +147,13 @@ export async function listVendors(companyId) {
             phone, email, address,
             payment_term_type, payment_due_days, payment_due_date, payment_month_day,
             is_active, created_at, updated_at
-     FROM vendors
-     WHERE company_id=:companyId
-     ORDER BY id DESC`,
-    { companyId }
+     ${baseQuery}
+     ${orderStr}
+     LIMIT :limit OFFSET :offset`,
+    queryParams
   );
-  return rows;
+
+  return { rows, total };
 }
 
 export async function getVendor(companyId, id) {

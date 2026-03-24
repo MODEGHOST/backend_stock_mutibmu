@@ -30,7 +30,26 @@ router.post("/companies", auth, requirePermission("master.company.manage"), asyn
           email: body.email ?? null
         }
       );
-      return r.insertId;
+      const newCompanyId = r.insertId;
+
+      // Auto-seed default roles for this new company by cloning from global templates
+      const [globalRoles] = await conn.query(`SELECT * FROM roles WHERE company_id IS NULL AND code != 'system_owner'`);
+      for (const gRole of globalRoles) {
+        const [ins] = await conn.query(
+          `INSERT INTO roles (company_id, code, name, is_system, is_active, created_at) VALUES (?, ?, ?, 0, 1, NOW())`,
+          [newCompanyId, gRole.code, gRole.name]
+        );
+        const localRoleId = ins.insertId;
+
+        const [perms] = await conn.query(`SELECT permission_id FROM role_permissions WHERE role_id = ?`, [gRole.id]);
+        for (const p of perms) {
+          await conn.query(
+            `INSERT INTO role_permissions (role_id, permission_id, created_at) VALUES (?, ?, NOW())`, 
+            [localRoleId, p.permission_id]
+          );
+        }
+      }
+      return newCompanyId;
     });
 
     res.json({ id });

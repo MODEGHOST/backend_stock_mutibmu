@@ -6,7 +6,8 @@ import {
   getUnpaidCommissionsSummary, 
   payCommission, 
   getCommissionPaymentHistory, 
-  getUnpaidCommissionInvoices 
+  getUnpaidCommissionInvoices,
+  getCommissionPaymentItems
 } from "../services/commissions.service.js";
 
 const router = Router();
@@ -65,6 +66,11 @@ router.post("/pay", auth, async (req, res, next) => {
         finance_account_id: z.number().int().positive(),
         amount: z.number().min(0).optional(), 
         note: z.string().optional(),
+        items: z.array(z.object({
+          sale_id: z.number().int().positive(),
+          original_amount: z.number().min(0),
+          paid_amount: z.number().min(0)
+        })).optional(),
       })
       .refine(data => (data.from && data.to) || (data.invoice_ids && data.invoice_ids.length > 0), {
         message: "ต้องระบุช่วงเวลา (from, to) หรือเลือกบิลที่ต้องการจ่าย (invoice_ids)",
@@ -88,6 +94,19 @@ router.get("/history", auth, async (req, res, next) => {
     const offset = (page - 1) * limit;
 
     res.json(await getCommissionPaymentHistory(companyId, limit, offset));
+  } catch (e) {
+    next(e);
+  }
+});
+
+// GET /commissions/history/:id/items (Admin Only)
+router.get("/history/:id/items", auth, async (req, res, next) => {
+  try {
+    const companyId = req.user.company_id;
+    if (!companyId) return res.status(400).json({ message: "No company_id" });
+
+    const paymentId = parseInt(req.params.id, 10);
+    res.json(await getCommissionPaymentItems(companyId, paymentId));
   } catch (e) {
     next(e);
   }

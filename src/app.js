@@ -1,7 +1,9 @@
+import * as Sentry from "@sentry/node";
 import express from "express";
 import cors from "cors";
 import helmet from "helmet";
 import HttpError from "./utils/httpError.js";
+import { sendLineErrorAlert } from "./utils/lineNotify.js";
 import authRoutes from "./routes/auth.routes.js";
 import adminRoutes from "./routes/admin.routes.js";
 import productRoutes from "./routes/product.routes.js";
@@ -20,6 +22,7 @@ import transferRoutes from "./routes/transfer.routes.js";
 import countRoutes from "./routes/count.routes.js";
 import financeRoutes from "./routes/finance.routes.js";
 import commissionsRoutes from "./routes/commissions.routes.js";
+import auditRoutes from "./routes/audit.routes.js";
 import { env } from "./config/env.js";
 
 export function createApp() {
@@ -54,13 +57,31 @@ export function createApp() {
   app.use("/stock/counts", countRoutes);
   app.use("/finance-accounts", financeRoutes);
   app.use("/commissions", commissionsRoutes);
+  app.use("/admin/audit-logs", auditRoutes);
 
   app.use((req, res) => res.status(404).json({ message: "Not found" }));
+
+  Sentry.setupExpressErrorHandler(app);
 
   app.use((err, req, res, next) => {
     const status = err instanceof HttpError ? err.status : 500;
     const message = err?.message || "Server error";
-    res.status(status).json({ message });
+    
+    // Using Sentry's res.sentry property to give users a reference ID
+    if (status === 500 && res.sentry) {
+      console.error(`[SENTRY ID: ${res.sentry}]`, err);
+    } else if (status === 500) {
+      console.error(err);
+    }
+
+    if (status === 500) {
+      sendLineErrorAlert(`🚨 ระบบเกิดขัดข้อง (Error 500)\n\n📍 URL: ${req.originalUrl}\n📝 ข้อความ: ${message}\n🔍 Sentry ID: ${res.sentry || 'ไม่มี'}`).catch(console.error);
+    }
+    
+    res.status(status).json({ 
+      message, 
+      errorId: res.sentry || undefined 
+    });
   });
 
   return app;

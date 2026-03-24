@@ -34,7 +34,8 @@ export async function dashboardSummary(companyId, from, to, lowStockThreshold = 
     `
     SELECT
       COUNT(*) AS inv_count,
-      COALESCE(SUM(s.total), 0) AS sales_total
+      COALESCE(SUM(s.total), 0) AS sales_total,
+      COALESCE(SUM((s.total - COALESCE(s.tax, 0)) - COALESCE(s.cogs_total, 0)), 0) AS profit_total
     FROM sales s
     WHERE s.company_id = ?
       AND s.status IN (${SALE_OK.map(() => "?").join(",")})
@@ -155,6 +156,7 @@ export async function dashboardSummary(companyId, from, to, lowStockThreshold = 
       stockQty: Number(a.stock_qty || 0),
       lowStockCount: Number(b.low_count || 0),
       salesTotal: Number(c.sales_total || 0),
+      profitTotal: Number(c.profit_total || 0),
       invoiceCount: Number(c.inv_count || 0),
       pendingConfirmedCount: Number(pc.pending_confirmed || 0),
       pendingDraftCount: Number(pd.pending_draft || 0),
