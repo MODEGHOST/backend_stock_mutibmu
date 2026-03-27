@@ -23,6 +23,7 @@ import countRoutes from "./routes/count.routes.js";
 import financeRoutes from "./routes/finance.routes.js";
 import commissionsRoutes from "./routes/commissions.routes.js";
 import auditRoutes from "./routes/audit.routes.js";
+import publicRoutes from "./routes/public.routes.js";
 import { env } from "./config/env.js";
 
 export function createApp() {
@@ -58,6 +59,9 @@ export function createApp() {
   app.use("/finance-accounts", financeRoutes);
   app.use("/commissions", commissionsRoutes);
   app.use("/admin/audit-logs", auditRoutes);
+
+  // Routes สาธารณะที่คนยังไม่ login ก็เรียกได้
+  app.use("/public", publicRoutes);
 
   app.use((req, res) => res.status(404).json({ message: "Not found" }));
 
