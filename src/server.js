@@ -3,7 +3,6 @@ import { nodeProfilingIntegration } from "@sentry/profiling-node";
 import { env } from "./config/env.js";
 import { sendLineErrorAlert } from "./utils/lineNotify.js";
 
-// Initialize Sentry only if DSN is provided
 if (process.env.SENTRY_DSN) {
   Sentry.init({
     dsn: process.env.SENTRY_DSN,
@@ -26,13 +25,13 @@ await seedSystemOwner();
 
 process.on("uncaughtException", async (err) => {
   console.error("Uncaught Exception:", err);
-  await sendLineErrorAlert(`🚨 FATAL CRASH (Uncaught Exception)\n\n📝 ${err?.message}`);
+  await sendLineErrorAlert(`FATAL CRASH (Uncaught Exception)\n\n ${err?.message}`);
   process.exit(1);
 });
 
 process.on("unhandledRejection", async (reason, promise) => {
   console.error("Unhandled Rejection:", reason);
-  await sendLineErrorAlert(`🚨 FATAL CRASH (Unhandled Rejection)\n\n📝 ${reason}`);
+  await sendLineErrorAlert(`FATAL CRASH (Unhandled Rejection)\n\n ${reason}`);
   process.exit(1);
 });
 

@@ -1,9 +1,8 @@
 import { pool, withTx } from "../config/db.js";
 import HttpError from "../utils/httpError.js";
 
-// List all roles available to the company (including global roles)
+
 export async function listCompanyRoles(userId, companyId) {
-  // Check if current user is system_owner
   const [isAdmin] = await pool.query(
     `SELECT 1 FROM user_roles ur JOIN roles r ON ur.role_id = r.id WHERE ur.user_id = :userId AND r.code = 'system_owner' LIMIT 1`,
     { userId }
@@ -34,11 +33,11 @@ export async function listCompanyRoles(userId, companyId) {
   return { rows };
 }
 
-// Create custom role for a company
+
 export async function createCompanyRole(companyId, body) {
   const { code, name } = body;
   
-  // ensure code is unique or just generate a unique code per company
+
   const finalCode = code || `role_${companyId}_${Date.now()}`;
 
   const [r] = await pool.query(
@@ -55,7 +54,6 @@ export async function createCompanyRole(companyId, body) {
 export async function updateCompanyRole(companyId, roleId, body) {
   const { name } = body;
   
-  // Only allow updating roles that belong specifically to this company
   const [r] = await pool.query(
     `
     UPDATE roles
@@ -73,29 +71,24 @@ export async function updateCompanyRole(companyId, roleId, body) {
 }
 
 export async function deleteCompanyRole(companyId, roleId) {
-  // Only allow deleting roles that belong specifically to this company
-  // Note: We might want to clear user_roles first, or rely on ON DELETE CASCADE.
-  // Assuming ON DELETE CASCADE is set up or we can manual delete.
+
   return await withTx(async (conn) => {
-    // Check if role exists and belongs to company
+
     const [roles] = await conn.query(
       `SELECT id FROM roles WHERE id = :roleId AND company_id = :companyId AND is_system = 0`,
       { roleId, companyId }
     );
     if (!roles.length) throw new HttpError(404, "Role not found or cannot delete global/system roles");
 
-    // Delete mappings
     await conn.query(`DELETE FROM user_roles WHERE role_id = :roleId`, { roleId });
     await conn.query(`DELETE FROM role_permissions WHERE role_id = :roleId`, { roleId });
     
-    // Delete role
     const [r] = await conn.query(`DELETE FROM roles WHERE id = :roleId`, { roleId });
     
     return { ok: true };
   });
 }
 
-// Permissions list
 export async function listAllPermissions() {
   const [rows] = await pool.query(
     `
@@ -128,7 +121,7 @@ export async function getRolePermissions(companyId, roleId) {
 
 export async function setRolePermissions(userId, companyId, roleId, permissionIds) {
   return await withTx(async (conn) => {
-    // Check if current user is system_owner
+
     const [isAdmin] = await conn.query(
       `SELECT 1 FROM user_roles ur JOIN roles r ON ur.role_id = r.id WHERE ur.user_id = :userId AND r.code = 'system_owner' LIMIT 1`,
       { userId }

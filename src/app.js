@@ -60,7 +60,7 @@ export function createApp() {
   app.use("/commissions", commissionsRoutes);
   app.use("/admin/audit-logs", auditRoutes);
 
-  // Routes สาธารณะที่คนยังไม่ login ก็เรียกได้
+
   app.use("/public", publicRoutes);
 
   app.use((req, res) => res.status(404).json({ message: "Not found" }));
@@ -71,7 +71,7 @@ export function createApp() {
     const status = err instanceof HttpError ? err.status : 500;
     const message = err?.message || "Server error";
     
-    // Using Sentry's res.sentry property to give users a reference ID
+
     if (status === 500 && res.sentry) {
       console.error(`[SENTRY ID: ${res.sentry}]`, err);
     } else if (status === 500) {
@@ -79,7 +79,7 @@ export function createApp() {
     }
 
     if (status === 500) {
-      sendLineErrorAlert(`🚨 ระบบเกิดขัดข้อง (Error 500)\n\n📍 URL: ${req.originalUrl}\n📝 ข้อความ: ${message}\n🔍 Sentry ID: ${res.sentry || 'ไม่มี'}`).catch(console.error);
+      sendLineErrorAlert(` ระบบเกิดขัดข้อง (Error 500)\n\n URL: ${req.originalUrl}\n ข้อความ: ${message}\n Sentry ID: ${res.sentry || 'ไม่มี'}`).catch(console.error);
     }
     
     res.status(status).json({ 

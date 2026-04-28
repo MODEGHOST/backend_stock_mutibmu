@@ -49,7 +49,6 @@ export async function listCompanyUsers(companyId, { q, limit, offset }) {
     { companyId, kw },
   );
 
-  // roles ของแต่ละ user (optional แต่แนะนำให้ส่งไปหน้า admin)
   const ids = (rows || []).map((r) => Number(r.id));
   let rolesByUser = {};
   if (ids.length) {
@@ -80,7 +79,6 @@ export async function listCompanyUsers(companyId, { q, limit, offset }) {
 
 export async function createCompanyUser(companyId, actorUserId, body) {
   return await withTx(async (conn) => {
-    // กัน email ซ้ำ
     const [dup] = await conn.query(
       `SELECT id FROM users WHERE email=:email LIMIT 1`,
       { email: body.email },
@@ -114,9 +112,8 @@ export async function createCompanyUser(companyId, actorUserId, body) {
 
     const userId = r.insertId;
 
-    // assign roles (ถ้าส่งมา)
+
     if (Array.isArray(body.role_ids) && body.role_ids.length) {
-      // ต้องเป็น role ของบริษัทเดียวกัน หรือ role กลาง (ถ้าคุณอนุญาต)
       const [roles] = await conn.query(
         `
   SELECT id
