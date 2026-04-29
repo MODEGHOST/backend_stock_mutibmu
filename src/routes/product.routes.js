@@ -4,6 +4,8 @@ import { auth } from "../middleware/auth.js";
 import { requirePermission } from "../middleware/requirePermission.js";
 import {
   listProducts,
+  listProductUnits,
+  getNextProductCode,
   getProduct,
   createProduct,
   updateProduct,
@@ -25,6 +27,23 @@ router.get("/", auth, requirePermission("master.product.manage"), async (req, re
   try {
     const { q, sortKey, sortOrder, page = 1, limit = 20 } = req.query;
     res.json(await listProducts(req.user.company_id, { q, sortKey, sortOrder, page, limit }));
+  } catch (e) {
+    next(e);
+  }
+});
+
+router.get("/units", auth, requirePermission("master.product.manage"), async (req, res, next) => {
+  try {
+    const { q } = req.query;
+    res.json(await listProductUnits(req.user.company_id, { q }));
+  } catch (e) {
+    next(e);
+  }
+});
+
+router.get("/next-code", auth, requirePermission("master.product.manage"), async (req, res, next) => {
+  try {
+    res.json({ code: await getNextProductCode(req.user.company_id) });
   } catch (e) {
     next(e);
   }
