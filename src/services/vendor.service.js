@@ -2,6 +2,34 @@
 import { pool } from "../config/db.js";
 import HttpError from "../utils/httpError.js";
 
+function vendorCodePrefix(type) {
+  if (type === "CUSTOMER") return "C";
+  if (type === "BOTH") return "VC";
+  return "V";
+}
+
+async function generateVendorCode(companyId, type = "VENDOR") {
+  const prefix = vendorCodePrefix(type);
+  const startIndex = prefix.length + 2;
+
+  const [rows] = await pool.query(
+    `SELECT code FROM vendors
+     WHERE company_id=:companyId AND code REGEXP :codePattern
+     ORDER BY CAST(SUBSTRING(code, :startIndex) AS UNSIGNED) DESC
+     LIMIT 1`,
+    { companyId, codePattern: `^${prefix}-[0-9]+$`, startIndex }
+  );
+
+  if (rows.length === 0) return `${prefix}-0001`;
+
+  const lastNumber = Number(String(rows[0].code || "").replace(/\D/g, "")) || 0;
+  return `${prefix}-${String(lastNumber + 1).padStart(4, "0")}`;
+}
+
+export async function getNextVendorCode(companyId, type = "VENDOR") {
+  return generateVendorCode(companyId, type);
+}
+
 async function ensureCodeUnique(companyId, code, excludeId = null) {
   const [rows] = await pool.query(
     `SELECT id FROM vendors
@@ -11,6 +39,46 @@ async function ensureCodeUnique(companyId, code, excludeId = null) {
     { companyId, code, excludeId }
   );
   if (rows.length > 0) throw new HttpError(400, "Vendor code already exists");
+}
+
+function normalizeTaxId(taxId) {
+  const value = String(taxId ?? "").trim();
+  return value || null;
+}
+
+function isValidThaiNationalId(taxId) {
+  const value = normalizeTaxId(taxId);
+  if (!value) return true;
+  if (!/^\d{13}$/.test(value)) return false;
+
+  const sum = value
+    .slice(0, 12)
+    .split("")
+    .reduce((total, digit, index) => total + Number(digit) * (13 - index), 0);
+  const checkDigit = (11 - (sum % 11)) % 10;
+
+  return checkDigit === Number(value[12]);
+}
+
+async function ensureTaxIdUnique(companyId, taxId, excludeId = null) {
+  const normalizedTaxId = normalizeTaxId(taxId);
+  if (!normalizedTaxId) return;
+
+  if (!isValidThaiNationalId(normalizedTaxId)) {
+    throw new HttpError(400, "เลขทะเบียน 13 หลักไม่ถูกต้อง กรุณาตรวจสอบ ใหม่อีกครั้ง");
+  }
+
+  const [rows] = await pool.query(
+    `SELECT id, tax_id FROM vendors
+     WHERE company_id=:companyId AND TRIM(tax_id)=:taxId
+       AND (:excludeId IS NULL OR id <> :excludeId)
+     LIMIT 1`,
+    { companyId, taxId: normalizedTaxId, excludeId }
+  );
+
+  if (rows.length > 0) {
+    throw new HttpError(400, `มีเลขทะเบียน "${normalizedTaxId}" อยู่ในระบบแล้ว กรุณาตรวจสอบ ใหม่อีกครั้ง`);
+  }
 }
 
 // --- helpers: enforce only one primary/default ---
@@ -233,136 +301,144 @@ export async function getVendor(companyId, id) {
 }
 
 export async function createVendor(companyId, data) {
-  await ensureCodeUnique(companyId, data.code);
+  let finalCode = data.code;
+  const taxId = normalizeTaxId(data.tax_id);
+  await ensureTaxIdUnique(companyId, taxId);
 
   const conn = await pool.getConnection();
   try {
+    if (!data.code) finalCode = await generateVendorCode(companyId, data.type);
+    await ensureCodeUnique(companyId, finalCode);
+
     await conn.beginTransaction();
 
-    const { payment_term_type, payment_due_days, payment_due_date, payment_month_day } =
-      normalizePaymentTerm(data.payment_term);
+      const { payment_term_type, payment_due_days, payment_due_date, payment_month_day } =
+        normalizePaymentTerm(data.payment_term);
 
-    const [r] = await conn.query(
-      `INSERT INTO vendors
-       (company_id, code, name, type,
-        tax_id, tax_country, office_type,
-        legal_entity_type, legal_form, business_name,
-        person_first_name, person_last_name,
-        phone, email, address,
-        is_active,
-        payment_term_type, payment_due_days, payment_due_date, payment_month_day)
-       VALUES
-       (:company_id, :code, :name, :type,
-        :tax_id, :tax_country, :office_type,
-        :legal_entity_type, :legal_form, :business_name,
-        :person_first_name, :person_last_name,
-        :phone, :email, :address,
-        :is_active,
-        :payment_term_type, :payment_due_days, :payment_due_date, :payment_month_day)`,
-      {
-        company_id: companyId,
-        code: data.code,
-        name: data.name,
-        type: data.type ?? 'VENDOR',
+      const [r] = await conn.query(
+        `INSERT INTO vendors
+         (company_id, code, name, type,
+          tax_id, tax_country, office_type,
+          legal_entity_type, legal_form, business_name,
+          person_first_name, person_last_name,
+          phone, email, address,
+          is_active,
+          payment_term_type, payment_due_days, payment_due_date, payment_month_day)
+         VALUES
+         (:company_id, :code, :name, :type,
+          :tax_id, :tax_country, :office_type,
+          :legal_entity_type, :legal_form, :business_name,
+          :person_first_name, :person_last_name,
+          :phone, :email, :address,
+          :is_active,
+          :payment_term_type, :payment_due_days, :payment_due_date, :payment_month_day)`,
+        {
+          company_id: companyId,
+          code: finalCode,
+          name: data.name,
+          type: data.type ?? 'VENDOR',
 
-        tax_id: data.tax_id ?? null,
-        tax_country: data.tax_country ?? "TH",
-        office_type: data.office_type ?? "unknown",
+          tax_id: taxId,
+          tax_country: data.tax_country ?? "TH",
+          office_type: data.office_type ?? "unknown",
 
-        legal_entity_type: data.legal_entity_type ?? "corporate",
-        legal_form: data.legal_form ?? null,
-        business_name: data.business_name ?? null,
-        person_first_name: data.person_first_name ?? null,
-        person_last_name: data.person_last_name ?? null,
+          legal_entity_type: data.legal_entity_type ?? "corporate",
+          legal_form: data.legal_form ?? null,
+          business_name: data.business_name ?? null,
+          person_first_name: data.person_first_name ?? null,
+          person_last_name: data.person_last_name ?? null,
 
-        phone: data.phone ?? null,
-        email: data.email ?? null,
-        address: data.address ?? null,
-        is_active: data.is_active ?? 1,
+          phone: data.phone ?? null,
+          email: data.email ?? null,
+          address: data.address ?? null,
+          is_active: data.is_active ?? 1,
 
-        payment_term_type,
-        payment_due_days,
-        payment_due_date,
-        payment_month_day,
+          payment_term_type,
+          payment_due_days,
+          payment_due_date,
+          payment_month_day,
+        }
+      );
+
+      const vendorId = r.insertId;
+
+      const reg = normalizeAddress(data.registered_address);
+      const ship = normalizeAddress(data.shipping_address);
+      const goodsShip = normalizeAddress(data.goods_shipping_address);
+
+      if (reg) {
+        await conn.query(
+          `INSERT INTO vendor_addresses
+           (vendor_id, addr_type, contact_name, address_line, subdistrict, district, province, postcode, country)
+           VALUES
+           (:vendor_id,'registered',:contact_name,:address_line,:subdistrict,:district,:province,:postcode,:country)
+           ON DUPLICATE KEY UPDATE
+             contact_name=VALUES(contact_name), address_line=VALUES(address_line),
+             subdistrict=VALUES(subdistrict), district=VALUES(district), province=VALUES(province),
+             postcode=VALUES(postcode), country=VALUES(country)`,
+          { vendor_id: vendorId, ...reg }
+        );
       }
-    );
 
-    const vendorId = r.insertId;
+      if (ship) {
+        await conn.query(
+          `INSERT INTO vendor_addresses
+           (vendor_id, addr_type, contact_name, address_line, subdistrict, district, province, postcode, country)
+           VALUES
+           (:vendor_id,'shipping',:contact_name,:address_line,:subdistrict,:district,:province,:postcode,:country)
+           ON DUPLICATE KEY UPDATE
+             contact_name=VALUES(contact_name), address_line=VALUES(address_line),
+             subdistrict=VALUES(subdistrict), district=VALUES(district), province=VALUES(province),
+             postcode=VALUES(postcode), country=VALUES(country)`,
+          { vendor_id: vendorId, ...ship }
+        );
+      }
 
-    const reg = normalizeAddress(data.registered_address);
-    const ship = normalizeAddress(data.shipping_address);
-    const goodsShip = normalizeAddress(data.goods_shipping_address);
+      if (goodsShip) {
+        await conn.query(
+          `INSERT INTO vendor_shipping_addresses
+           (vendor_id, contact_name, phone, address_line, subdistrict, district, province, postcode, country)
+           VALUES
+           (:vendor_id,:contact_name,:phone,:address_line,:subdistrict,:district,:province,:postcode,:country)`,
+          { vendor_id: vendorId, ...goodsShip }
+        );
+      }
 
-    if (reg) {
-      await conn.query(
-        `INSERT INTO vendor_addresses
-         (vendor_id, addr_type, contact_name, address_line, subdistrict, district, province, postcode, country)
-         VALUES
-         (:vendor_id,'registered',:contact_name,:address_line,:subdistrict,:district,:province,:postcode,:country)
-         ON DUPLICATE KEY UPDATE
-           contact_name=VALUES(contact_name), address_line=VALUES(address_line),
-           subdistrict=VALUES(subdistrict), district=VALUES(district), province=VALUES(province),
-           postcode=VALUES(postcode), country=VALUES(country)`,
-        { vendor_id: vendorId, ...reg }
-      );
-    }
+      for (const c of normalizeContacts(data.contacts)) {
+        await conn.query(
+          `INSERT INTO vendor_contacts (vendor_id, label, channel, value, is_primary, sort_order)
+           VALUES (:vendor_id, :label, :channel, :value, :is_primary, :sort_order)`,
+          { vendor_id: vendorId, ...c }
+        );
+      }
 
-    if (ship) {
-      await conn.query(
-        `INSERT INTO vendor_addresses
-         (vendor_id, addr_type, contact_name, address_line, subdistrict, district, province, postcode, country)
-         VALUES
-         (:vendor_id,'shipping',:contact_name,:address_line,:subdistrict,:district,:province,:postcode,:country)
-         ON DUPLICATE KEY UPDATE
-           contact_name=VALUES(contact_name), address_line=VALUES(address_line),
-           subdistrict=VALUES(subdistrict), district=VALUES(district), province=VALUES(province),
-           postcode=VALUES(postcode), country=VALUES(country)`,
-        { vendor_id: vendorId, ...ship }
-      );
-    }
+      for (const p of normalizePeople(data.people)) {
+        await conn.query(
+          `INSERT INTO vendor_people
+           (vendor_id, prefix, first_name, last_name, nickname, email, phone, position, department, is_primary, sort_order)
+           VALUES
+           (:vendor_id,:prefix,:first_name,:last_name,:nickname,:email,:phone,:position,:department,:is_primary,:sort_order)`,
+          { vendor_id: vendorId, ...p }
+        );
+      }
 
-    if (goodsShip) {
-      await conn.query(
-        `INSERT INTO vendor_shipping_addresses
-         (vendor_id, contact_name, phone, address_line, subdistrict, district, province, postcode, country)
-         VALUES
-         (:vendor_id,:contact_name,:phone,:address_line,:subdistrict,:district,:province,:postcode,:country)`,
-        { vendor_id: vendorId, ...goodsShip }
-      );
-    }
+      for (const b of normalizeBanks(data.bank_accounts)) {
+        await conn.query(
+          `INSERT INTO vendor_bank_accounts
+           (vendor_id, bank_code, bank_name, account_name, account_no, branch_code, is_default, sort_order)
+           VALUES
+           (:vendor_id,:bank_code,:bank_name,:account_name,:account_no,:branch_code,:is_default,:sort_order)`,
+          { vendor_id: vendorId, ...b }
+        );
+      }
 
-    for (const c of normalizeContacts(data.contacts)) {
-      await conn.query(
-        `INSERT INTO vendor_contacts (vendor_id, label, channel, value, is_primary, sort_order)
-         VALUES (:vendor_id, :label, :channel, :value, :is_primary, :sort_order)`,
-        { vendor_id: vendorId, ...c }
-      );
-    }
-
-    for (const p of normalizePeople(data.people)) {
-      await conn.query(
-        `INSERT INTO vendor_people
-         (vendor_id, prefix, first_name, last_name, nickname, email, phone, position, department, is_primary, sort_order)
-         VALUES
-         (:vendor_id,:prefix,:first_name,:last_name,:nickname,:email,:phone,:position,:department,:is_primary,:sort_order)`,
-        { vendor_id: vendorId, ...p }
-      );
-    }
-
-    for (const b of normalizeBanks(data.bank_accounts)) {
-      await conn.query(
-        `INSERT INTO vendor_bank_accounts
-         (vendor_id, bank_code, bank_name, account_name, account_no, branch_code, is_default, sort_order)
-         VALUES
-         (:vendor_id,:bank_code,:bank_name,:account_name,:account_no,:branch_code,:is_default,:sort_order)`,
-        { vendor_id: vendorId, ...b }
-      );
-    }
-
-    await conn.commit();
-    return vendorId;
+      await conn.commit();
+      return vendorId;
   } catch (e) {
     await conn.rollback();
+    if (e.code === "ER_DUP_ENTRY" && !data.code) {
+      throw new HttpError(400, "Too many concurrent requests. Failed to generate unique vendor code.");
+    }
     throw e;
   } finally {
     conn.release();
@@ -371,6 +447,8 @@ export async function createVendor(companyId, data) {
 
 export async function updateVendor(companyId, id, data) {
   await ensureCodeUnique(companyId, data.code, id);
+  const taxId = normalizeTaxId(data.tax_id);
+  await ensureTaxIdUnique(companyId, taxId, id);
 
   const conn = await pool.getConnection();
   try {
@@ -397,7 +475,7 @@ export async function updateVendor(companyId, id, data) {
         name: data.name,
         type: data.type ?? 'VENDOR',
 
-        tax_id: data.tax_id ?? null,
+        tax_id: taxId,
         tax_country: data.tax_country ?? "TH",
         office_type: data.office_type ?? "unknown",
 

@@ -5,6 +5,7 @@ import { auth } from "../middleware/auth.js";
 import { requirePermission } from "../middleware/requirePermission.js";
 import {
   listVendors,
+  getNextVendorCode,
   getVendor,
   createVendor,
   updateVendor,
@@ -96,7 +97,7 @@ const LegalFormSchema = z.enum([
 ]);
 
 const bodySchema = z.object({
-  code: z.string().min(1),
+  code: z.string().min(1).optional(),
   name: z.string().min(1),
 
   tax_id: z.string().nullable().optional(),
@@ -133,6 +134,17 @@ router.get("/", auth, requirePermission("master.vendor.manage"), async (req, res
     if (!companyId) return res.status(400).json({ message: "company_id required" });
     const { q, sortKey, sortOrder, page = 1, limit = 20 } = req.query;
     res.json(await listVendors(companyId, { q, sortKey, sortOrder, page, limit }));
+  } catch (e) {
+    next(e);
+  }
+});
+
+router.get("/next-code", auth, requirePermission("master.vendor.manage"), async (req, res, next) => {
+  try {
+    const companyId = req.user.company_id;
+    if (!companyId) return res.status(400).json({ message: "company_id required" });
+    const type = ["VENDOR", "CUSTOMER", "BOTH"].includes(req.query.type) ? req.query.type : "VENDOR";
+    res.json({ code: await getNextVendorCode(companyId, type) });
   } catch (e) {
     next(e);
   }
