@@ -5,6 +5,7 @@ import { auth } from "../middleware/auth.js";
 import { requirePermission } from "../middleware/requirePermission.js";
 import {
   createGrn,
+  getNextGrnNo,
   getGrn,
   approveGrn,
   cancelGrn,
@@ -15,6 +16,7 @@ import {
   cancelPo,
   listPo,
   getNextPoNo,
+  getNextBillNos,
   createBill,
   getBill,
   approveBill,
@@ -81,8 +83,8 @@ router.post(
 
       const body = z
         .object({
-          bill_no: z.string().min(1),
-          tax_invoice_no: z.string().min(1),
+          bill_no: DocNoOptional,
+          tax_invoice_no: DocNoOptional,
           po_id: z.number().int().positive().nullable().optional(),
           vendor_id: z.number().int().positive(),
           vendor_person_id: z.number().int().positive().nullable().optional(),
@@ -103,6 +105,24 @@ router.post(
         .parse(req.body);
 
       res.json(await createBill(companyId, req.user.sub, body));
+    } catch (e) {
+      next(e);
+    }
+  },
+);
+
+router.get(
+  "/bill/next-no",
+  auth,
+  requirePermission("purchase.bill.manage"),
+  async (req, res, next) => {
+    try {
+      const companyId = req.user.company_id;
+      if (!companyId)
+        return res.status(400).json({ message: "company_id required" });
+
+      const issueDate = DateStr.optional().parse(req.query.issue_date);
+      res.json(await getNextBillNos(companyId, issueDate));
     } catch (e) {
       next(e);
     }
@@ -244,6 +264,24 @@ router.post(
 // ✅ รองรับ 2 โหมด
 // 1) legacy: GRN ผูก PO/ป้อนเอง
 // 2) recommended: GRN ผูก BILL (ส่ง bill_id) + ใส่ bill_item_id เพื่อ partial receive
+router.get(
+  "/grn/next-no",
+  auth,
+  requirePermission("purchase.grn.manage"),
+  async (req, res, next) => {
+    try {
+      const companyId = req.user.company_id;
+      if (!companyId)
+        return res.status(400).json({ message: "company_id required" });
+
+      const issueDate = DateStr.optional().parse(req.query.issue_date);
+      res.json(await getNextGrnNo(companyId, issueDate));
+    } catch (e) {
+      next(e);
+    }
+  },
+);
+
 router.post(
   "/grn",
   auth,

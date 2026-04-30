@@ -1,7 +1,6 @@
 // purchase.service.js
 import { withTx, pool } from "../config/db.js";
 import HttpError from "../utils/httpError.js";
-import { generateDocNo } from "./documentNo.service.js";
 import dayjs from "dayjs";
 
 /**
@@ -347,6 +346,199 @@ export async function getNextPoNo(companyId, issueDate) {
   };
 }
 
+function buildBillNos(issueDate, seq) {
+  const core = `PO${dayjs(issueDate).format("YYYYMM")}-${String(seq).padStart(4, "0")}`;
+  return {
+    bill_no: `BILL-${core}`,
+    tax_invoice_no: `TAX-${core}`,
+  };
+}
+
+async function getMaxExistingBillSeq(conn, companyId, issueDate) {
+  const dateStr = dayjs(issueDate).format("YYYYMM");
+  const [rows] = await conn.query(
+    `
+    SELECT bill_no, tax_invoice_no
+    FROM purchase_bills
+    WHERE company_id=:companyId
+      AND (
+        bill_no LIKE :billNeedle
+        OR tax_invoice_no LIKE :taxNeedle
+      )
+    `,
+    {
+      companyId,
+      billNeedle: `BILL-PO${dateStr}-%`,
+      taxNeedle: `TAX-PO${dateStr}-%`,
+    },
+  );
+
+  const re = new RegExp(`^(?:BILL|TAX)-PO${dateStr}-(\\d+)$`);
+  let maxSeq = 0;
+  for (const row of rows) {
+    for (const value of [row.bill_no, row.tax_invoice_no]) {
+      const m = String(value || "").match(re);
+      if (!m) continue;
+      const seq = Number(m[1]);
+      if (Number.isFinite(seq) && seq > maxSeq) maxSeq = seq;
+    }
+  }
+  return maxSeq;
+}
+
+async function generateBillNos(conn, companyId, issueDate) {
+  const periodKey = dayjs(issueDate).format("YYYY-MM");
+  const maxExistingSeq = await getMaxExistingBillSeq(conn, companyId, issueDate);
+
+  const [rows] = await conn.query(
+    `
+    SELECT last_seq
+    FROM company_doc_sequences
+    WHERE company_id=:companyId AND doc_type='BILL' AND period_key=:periodKey
+    FOR UPDATE
+    `,
+    { companyId, periodKey },
+  );
+
+  let nextSeq = Math.max(maxExistingSeq, 0) + 1;
+  if (rows.length === 0) {
+    await conn.query(
+      `
+      INSERT INTO company_doc_sequences
+        (company_id, doc_type, period_key, last_seq)
+      VALUES
+        (:companyId, 'BILL', :periodKey, :nextSeq)
+      `,
+      { companyId, periodKey, nextSeq },
+    );
+  } else {
+    nextSeq = Math.max(Number(rows[0].last_seq || 0), maxExistingSeq) + 1;
+    await conn.query(
+      `
+      UPDATE company_doc_sequences
+      SET last_seq=:nextSeq
+      WHERE company_id=:companyId AND doc_type='BILL' AND period_key=:periodKey
+      `,
+      { nextSeq, companyId, periodKey },
+    );
+  }
+
+  return buildBillNos(issueDate, nextSeq);
+}
+
+export async function getNextBillNos(companyId, issueDate) {
+  const d = normalizeDateStr(issueDate) || dayjs().format("YYYY-MM-DD");
+  const periodKey = dayjs(d).format("YYYY-MM");
+  const maxExistingSeq = await getMaxExistingBillSeq(pool, companyId, d);
+
+  const [[seqRow]] = await pool.query(
+    `
+    SELECT last_seq
+    FROM company_doc_sequences
+    WHERE company_id=:companyId AND doc_type='BILL' AND period_key=:periodKey
+    LIMIT 1
+    `,
+    { companyId, periodKey },
+  );
+
+  return buildBillNos(
+    d,
+    Math.max(Number(seqRow?.last_seq || 0), maxExistingSeq) + 1,
+  );
+}
+
+function buildGrnNo(issueDate, seq) {
+  return `GRN-${dayjs(issueDate).format("YYYYMM")}-${String(seq).padStart(4, "0")}`;
+}
+
+async function getMaxExistingGrnSeq(conn, companyId, issueDate) {
+  const dateStr = dayjs(issueDate).format("YYYYMM");
+  const [rows] = await conn.query(
+    `
+    SELECT grn_no
+    FROM goods_receipts
+    WHERE company_id=:companyId AND grn_no LIKE :needle
+    `,
+    {
+      companyId,
+      needle: `GRN-${dateStr}-%`,
+    },
+  );
+
+  const re = new RegExp(`^GRN-${dateStr}-(\\d+)$`);
+  let maxSeq = 0;
+  for (const row of rows) {
+    const m = String(row.grn_no || "").match(re);
+    if (!m) continue;
+    const seq = Number(m[1]);
+    if (Number.isFinite(seq) && seq > maxSeq) maxSeq = seq;
+  }
+  return maxSeq;
+}
+
+async function generateGrnNo(conn, companyId, issueDate) {
+  const periodKey = dayjs(issueDate).format("YYYY-MM");
+  const maxExistingSeq = await getMaxExistingGrnSeq(conn, companyId, issueDate);
+
+  const [rows] = await conn.query(
+    `
+    SELECT last_seq
+    FROM company_doc_sequences
+    WHERE company_id=:companyId AND doc_type='GRN' AND period_key=:periodKey
+    FOR UPDATE
+    `,
+    { companyId, periodKey },
+  );
+
+  let nextSeq = Math.max(maxExistingSeq, 0) + 1;
+  if (rows.length === 0) {
+    await conn.query(
+      `
+      INSERT INTO company_doc_sequences
+        (company_id, doc_type, period_key, last_seq)
+      VALUES
+        (:companyId, 'GRN', :periodKey, :nextSeq)
+      `,
+      { companyId, periodKey, nextSeq },
+    );
+  } else {
+    nextSeq = Math.max(Number(rows[0].last_seq || 0), maxExistingSeq) + 1;
+    await conn.query(
+      `
+      UPDATE company_doc_sequences
+      SET last_seq=:nextSeq
+      WHERE company_id=:companyId AND doc_type='GRN' AND period_key=:periodKey
+      `,
+      { nextSeq, companyId, periodKey },
+    );
+  }
+
+  return buildGrnNo(issueDate, nextSeq);
+}
+
+export async function getNextGrnNo(companyId, issueDate) {
+  const d = normalizeDateStr(issueDate) || dayjs().format("YYYY-MM-DD");
+  const periodKey = dayjs(d).format("YYYY-MM");
+  const maxExistingSeq = await getMaxExistingGrnSeq(pool, companyId, d);
+
+  const [[seqRow]] = await pool.query(
+    `
+    SELECT last_seq
+    FROM company_doc_sequences
+    WHERE company_id=:companyId AND doc_type='GRN' AND period_key=:periodKey
+    LIMIT 1
+    `,
+    { companyId, periodKey },
+  );
+
+  return {
+    grn_no: buildGrnNo(
+      d,
+      Math.max(Number(seqRow?.last_seq || 0), maxExistingSeq) + 1,
+    ),
+  };
+}
+
 // -------------------------
 // BILL helpers
 // -------------------------
@@ -489,11 +681,15 @@ export async function createBill(companyId, userId, data) {
     
     if (!issue_date) throw new HttpError(400, "issue_date is required");
 
-    const bill_no = normalizeRequiredStr(data?.bill_no, "bill_no");
-    const tax_invoice_no = normalizeRequiredStr(
-      data?.tax_invoice_no,
-      "tax_invoice_no",
-    );
+    let bill_no = normalizeDocNo(data?.bill_no);
+    let tax_invoice_no = normalizeDocNo(data?.tax_invoice_no);
+    let isManual = 1;
+    if (!bill_no || !tax_invoice_no) {
+      const generated = await generateBillNos(conn, companyId, issue_date);
+      bill_no = generated.bill_no;
+      tax_invoice_no = generated.tax_invoice_no;
+      isManual = 0;
+    }
 
     const po_id = data?.po_id ? ensurePositiveInt(data.po_id, "po_id") : null;
 
@@ -597,7 +793,7 @@ export async function createBill(companyId, userId, data) {
             :header_discount_value,
 
             :created_by,
-            1
+            :is_manual
           )
         `,
         {
@@ -629,6 +825,7 @@ export async function createBill(companyId, userId, data) {
           header_discount_value,
 
           created_by: userId,
+          is_manual: isManual,
         },
       );
       billId = r.insertId;
@@ -1220,7 +1417,7 @@ export async function createGrn(companyId, userId, data) {
     let isManual = 1;
 
     if (!grnNo) {
-      grnNo = await generateDocNo(conn, companyId, "GRN", issue_date);
+      grnNo = await generateGrnNo(conn, companyId, issue_date);
       isManual = 0;
     } else {
       const re = await assertManualAllowed(conn, companyId, "GRN");
