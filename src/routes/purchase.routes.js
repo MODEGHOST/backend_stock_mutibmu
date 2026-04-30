@@ -14,6 +14,7 @@ import {
   approvePo,
   cancelPo,
   listPo,
+  getNextPoNo,
   createBill,
   getBill,
   approveBill,
@@ -382,6 +383,24 @@ router.get(
 );
 
 // ===================== PO =====================
+router.get(
+  "/po/next-no",
+  auth,
+  requirePermission("purchase.po.manage"),
+  async (req, res, next) => {
+    try {
+      const companyId = req.user.company_id;
+      if (!companyId)
+        return res.status(400).json({ message: "company_id required" });
+
+      const issueDate = DateStr.optional().parse(req.query.issue_date);
+      res.json(await getNextPoNo(companyId, issueDate));
+    } catch (e) {
+      next(e);
+    }
+  },
+);
+
 router.post(
   "/po",
   auth,

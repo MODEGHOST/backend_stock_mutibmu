@@ -2,6 +2,7 @@
 import { withTx, pool } from "../config/db.js";
 import HttpError from "../utils/httpError.js";
 import { generateDocNo } from "./documentNo.service.js";
+import dayjs from "dayjs";
 
 /**
  * Assumptions (DB columns) สำหรับโหมด BILL -> GRN (partial receive)
@@ -212,6 +213,138 @@ async function assertManualAllowed(conn, companyId, docType) {
     }
   }
   return null;
+}
+
+function escapeRegExp(s) {
+  return String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function normalizePoPrefix(prefix) {
+  return String(prefix || "PO").replace(/[-_\s]+$/g, "") || "PO";
+}
+
+function buildPoNo(prefix, issueDate, seq) {
+  return `${normalizePoPrefix(prefix)}${dayjs(issueDate).format("YYYYMM")}-${String(seq).padStart(4, "0")}`;
+}
+
+async function loadPoDocConfig(conn, companyId) {
+  const [[cfg]] = await conn.query(
+    `
+    SELECT prefix
+    FROM company_doc_configs
+    WHERE company_id=:companyId AND doc_type='PO' AND is_enabled=1
+    LIMIT 1
+    `,
+    { companyId },
+  );
+  if (!cfg) {
+    throw new HttpError(400, "Document config not found for PO");
+  }
+  return cfg;
+}
+
+async function getMaxExistingPoSeq(conn, companyId, prefix, issueDate) {
+  const normalizedPrefix = normalizePoPrefix(prefix);
+  const dateStr = dayjs(issueDate).format("YYYYMM");
+  const [rows] = await conn.query(
+    `
+    SELECT po_no
+    FROM purchase_orders
+    WHERE company_id=:companyId AND po_no LIKE :needle
+    `,
+    {
+      companyId,
+      needle: `${normalizedPrefix}${dateStr}-%`,
+    },
+  );
+
+  const re = new RegExp(
+    `^${escapeRegExp(`${normalizedPrefix}${dateStr}`)}-(\\d+)$`,
+  );
+  let maxSeq = 0;
+  for (const row of rows) {
+    const m = String(row.po_no || "").match(re);
+    if (!m) continue;
+    const seq = Number(m[1]);
+    if (Number.isFinite(seq) && seq > maxSeq) maxSeq = seq;
+  }
+  return maxSeq;
+}
+
+async function generatePoNo(conn, companyId, issueDate) {
+  const cfg = await loadPoDocConfig(conn, companyId);
+  const periodKey = dayjs(issueDate).format("YYYY-MM");
+  const maxExistingSeq = await getMaxExistingPoSeq(
+    conn,
+    companyId,
+    cfg.prefix,
+    issueDate,
+  );
+
+  const [rows] = await conn.query(
+    `
+    SELECT last_seq
+    FROM company_doc_sequences
+    WHERE company_id=:companyId AND doc_type='PO' AND period_key=:periodKey
+    FOR UPDATE
+    `,
+    { companyId, periodKey },
+  );
+
+  let nextSeq = Math.max(maxExistingSeq, 0) + 1;
+  if (rows.length === 0) {
+    await conn.query(
+      `
+      INSERT INTO company_doc_sequences
+        (company_id, doc_type, period_key, last_seq)
+      VALUES
+        (:companyId, 'PO', :periodKey, :nextSeq)
+      `,
+      { companyId, periodKey, nextSeq },
+    );
+  } else {
+    nextSeq = Math.max(Number(rows[0].last_seq || 0), maxExistingSeq) + 1;
+    await conn.query(
+      `
+      UPDATE company_doc_sequences
+      SET last_seq=:nextSeq
+      WHERE company_id=:companyId AND doc_type='PO' AND period_key=:periodKey
+      `,
+      { nextSeq, companyId, periodKey },
+    );
+  }
+
+  return buildPoNo(cfg.prefix || "PO", issueDate, nextSeq);
+}
+
+export async function getNextPoNo(companyId, issueDate) {
+  const d = normalizeDateStr(issueDate) || dayjs().format("YYYY-MM-DD");
+  const cfg = await loadPoDocConfig(pool, companyId);
+  const periodKey = dayjs(d).format("YYYY-MM");
+  const maxExistingSeq = await getMaxExistingPoSeq(
+    pool,
+    companyId,
+    cfg.prefix,
+    d,
+  );
+
+  const [[seqRow]] = await pool.query(
+    `
+    SELECT last_seq
+    FROM company_doc_sequences
+    WHERE company_id=:companyId AND doc_type='PO' AND period_key=:periodKey
+    LIMIT 1
+    `,
+    { companyId, periodKey },
+  );
+
+  return {
+    po_no: buildPoNo(
+      cfg.prefix || "PO",
+      d,
+      Math.max(Number(seqRow?.last_seq || 0), maxExistingSeq) + 1,
+    ),
+  };
 }
 
 // -------------------------
@@ -1679,7 +1812,7 @@ export async function createPo(companyId, userId, data) {
     let isManual = 1;
 
     if (!poNo) {
-      poNo = await generateDocNo(conn, companyId, "PO", issue_date);
+      poNo = await generatePoNo(conn, companyId, issue_date);
       isManual = 0;
     } else {
       const re = await assertManualAllowed(conn, companyId, "PO");
