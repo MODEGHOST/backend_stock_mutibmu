@@ -119,7 +119,7 @@ export async function listProducts(companyId, params = {}) {
   const queryParams = { companyId };
 
   if (q) {
-    baseQuery += ` AND (code LIKE :q OR name LIKE :q)`;
+    baseQuery += ` AND (code LIKE :q OR name LIKE :q OR unit LIKE :q OR CAST(sell_price AS CHAR) LIKE :q)`;
     queryParams.q = `%${q}%`;
   }
 

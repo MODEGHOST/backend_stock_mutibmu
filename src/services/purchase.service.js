@@ -1161,6 +1161,48 @@ export async function listBill(companyId, opts = {}) {
   );
   const offset = (page - 1) * pageSize;
   const needle = `%${q}%`;
+  const totalAmountSql = `
+    (
+      (
+        (
+          SELECT COALESCE(SUM(
+            GREATEST(
+              0,
+              (i.qty * i.unit_cost)
+              - ((i.qty * i.unit_cost) * (i.discount_pct / 100))
+              - i.discount_amt
+            )
+          ), 0)
+          FROM purchase_bill_items i
+          WHERE i.purchase_bill_id = b.id
+        )
+        + COALESCE(b.extra_charge_amt,0)
+      )
+      -
+      CASE
+        WHEN UPPER(TRIM(COALESCE(b.header_discount_type,'')))='PERCENT'
+          THEN (
+            (
+              (
+                SELECT COALESCE(SUM(
+                  GREATEST(
+                    0,
+                    (i.qty * i.unit_cost)
+                    - ((i.qty * i.unit_cost) * (i.discount_pct / 100))
+                    - i.discount_amt
+                  )
+                ), 0)
+                FROM purchase_bill_items i
+                WHERE i.purchase_bill_id = b.id
+              )
+              + COALESCE(b.extra_charge_amt,0)
+            )
+            * (COALESCE(b.header_discount_value,0) / 100)
+          )
+        ELSE COALESCE(b.header_discount_value,0)
+      END
+    )
+  `;
 
   const where = `
     b.company_id = :companyId
@@ -1170,7 +1212,8 @@ export async function listBill(companyId, opts = {}) {
       b.bill_no LIKE :needle OR
       b.tax_invoice_no LIKE :needle OR
       v.name LIKE :needle OR
-      w.name LIKE :needle
+      w.name LIKE :needle OR
+      CAST((${totalAmountSql}) AS CHAR) LIKE :needle
     )
   `;
 
@@ -1209,46 +1252,7 @@ export async function listBill(companyId, opts = {}) {
       COALESCE(b.extra_charge_amt, 0) AS extra_charge_amt,
       (SELECT COUNT(*) FROM purchase_bill_items i WHERE i.purchase_bill_id = b.id) AS item_count,
 
-      (
-        (
-          (
-            SELECT COALESCE(SUM(
-              GREATEST(
-                0,
-                (i.qty * i.unit_cost)
-                - ((i.qty * i.unit_cost) * (i.discount_pct / 100))
-                - i.discount_amt
-              )
-            ), 0)
-            FROM purchase_bill_items i
-            WHERE i.purchase_bill_id = b.id
-          )
-          + COALESCE(b.extra_charge_amt,0)
-        )
-        -
-        CASE
-          WHEN UPPER(TRIM(COALESCE(b.header_discount_type,'')))='PERCENT'
-            THEN (
-              (
-                (
-                  SELECT COALESCE(SUM(
-                    GREATEST(
-                      0,
-                      (i.qty * i.unit_cost)
-                      - ((i.qty * i.unit_cost) * (i.discount_pct / 100))
-                      - i.discount_amt
-                    )
-                  ), 0)
-                  FROM purchase_bill_items i
-                  WHERE i.purchase_bill_id = b.id
-                )
-                + COALESCE(b.extra_charge_amt,0)
-              )
-              * (COALESCE(b.header_discount_value,0) / 100)
-            )
-          ELSE COALESCE(b.header_discount_value,0)
-        END
-      ) AS total_amount
+      ${totalAmountSql} AS total_amount
 
     FROM purchase_bills b
     JOIN vendors v ON v.id = b.vendor_id AND v.company_id = b.company_id
