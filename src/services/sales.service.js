@@ -435,9 +435,11 @@ export async function getSale(companyId, id) {
             v.code as customer_code,
             v.name as customer_name,
             v.address as customer_address,
-            v.tax_id as customer_tax_id
+            v.tax_id as customer_tax_id,
+            w.name as warehouse_name
      FROM sales s
      LEFT JOIN vendors v ON v.id = s.customer_id AND v.company_id = s.company_id
+     LEFT JOIN warehouses w ON w.id = s.warehouse_id AND w.company_id = s.company_id
      WHERE s.id=:id AND s.company_id=:companyId
      LIMIT 1`,
     { id, companyId },
@@ -977,6 +979,22 @@ export async function listSales(companyId, { q, limit, offset, status, has_recei
   return { rows, total: Number(cnt?.[0]?.total || 0) };
 }
 
+export async function listSalesSellers(companyId) {
+  const [rows] = await pool.query(
+    `
+    SELECT id, first_name, last_name, email, display_name
+    FROM users
+    WHERE company_id=:companyId
+      AND is_active=1
+    ORDER BY first_name ASC, last_name ASC, id ASC
+    LIMIT 200
+    `,
+    { companyId },
+  );
+
+  return rows;
+}
+
 /**
  * Collect Payment -> Generate Receipt (RE)
  * @param {number} companyId 
@@ -1000,6 +1018,7 @@ export async function collectPayment(companyId, userId, id, paymentDetails = {})
     // Use RE prefix
     const { generateDocNo } = await import("./documentNo.service.js");
     const issueDate = new Date();
+    const paymentReceivedDate = paymentDetails.payment_received_date || issueDate;
     const receiptNo = await generateDocNo(conn, companyId, "RE", issueDate);
     
     let taxNo = null;
@@ -1012,12 +1031,14 @@ export async function collectPayment(companyId, userId, id, paymentDetails = {})
     // 3. Update Sale
     await conn.query(
       `UPDATE sales 
-       SET receipt_no = ?, receipt_date = ?,
+       SET receipt_no = ?, receipt_date = ?, payment_received_date = ?,
            payment_status = 'PAID', paid_amount = total, balance_due = 0,
            finance_account_id = ?
        ${taxNo ? ', tax_invoice_no = ?, tax_invoice_date = ?' : ''}
        WHERE id = ?`,
-      taxNo ? [receiptNo, issueDate, finance_account_id, taxNo, issueDate, id] : [receiptNo, issueDate, finance_account_id, id]
+      taxNo
+        ? [receiptNo, issueDate, paymentReceivedDate, finance_account_id, taxNo, issueDate, id]
+        : [receiptNo, issueDate, paymentReceivedDate, finance_account_id, id]
     );
 
     // 4. Update Finance Account & Record Transaction
@@ -1041,11 +1062,11 @@ export async function collectPayment(companyId, userId, id, paymentDetails = {})
            ?, ?, 'INCOME', ?, 'SALES_RECEIPT', ?, ?, ?
          )
          `,
-         [companyId, finance_account_id, sale.total, id, issueDate, userId]
+         [companyId, finance_account_id, sale.total, id, paymentReceivedDate, userId]
        );
     }
 
-    return { ...sale, receipt_no: receiptNo, receipt_date: issueDate, tax_invoice_no: taxNo, finance_account_id };
+    return { ...sale, receipt_no: receiptNo, receipt_date: issueDate, payment_received_date: paymentReceivedDate, tax_invoice_no: taxNo, finance_account_id };
   });
 }
 

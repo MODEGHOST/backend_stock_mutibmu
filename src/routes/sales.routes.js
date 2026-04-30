@@ -14,6 +14,7 @@ import {
   collectPayment,
   issueTaxInvoice,
   deductSaleStock,
+  listSalesSellers,
 } from "../services/sales.service.js";
 
 const router = Router();
@@ -62,6 +63,21 @@ const CreateSaleSchema = z
       .min(1),
   })
   .strict();
+
+router.get(
+  "/sellers",
+  auth,
+  requirePermission("sales.inv.manage"),
+  async (req, res, next) => {
+    try {
+      const companyId = req.user.company_id;
+      if (!companyId) return res.status(400).json({ message: "company_id required" });
+      res.json(await listSalesSellers(companyId));
+    } catch (e) {
+      next(e);
+    }
+  },
+);
 
 router.get(
   "/invoice",
@@ -209,7 +225,8 @@ router.post(
       
       const body = z.object({
         issue_tax: z.boolean().optional(),
-        finance_account_id: z.number().int().positive().nullable().optional()
+        finance_account_id: z.number().int().positive().nullable().optional(),
+        payment_received_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional()
       }).parse(req.body);
 
       res.json(await collectPayment(companyId, req.user.sub, id, body));
