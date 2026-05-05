@@ -917,6 +917,170 @@ export async function cancelSale(companyId, userId, id, reason) {
   });
 }
 
+// Roll back the most recent stage by 1 step.
+//   SHIPPED  -> CONFIRMED (clear delivery info; restore stock if SHIPMENT mode)
+//   CONFIRMED -> QUOTATION (clear invoice info; restore stock if INVOICE/MANUAL mode)
+// Refuses if a receipt or tax invoice has been issued, or if status is QUOTATION/CANCELLED.
+export async function cancelSaleStep(companyId, userId, id, reason) {
+  return await withTx(async (conn) => {
+    const cancel_reason = (reason || "").toString().trim();
+    if (cancel_reason.length < 5) throw new HttpError(400, "reason is required (min 5 chars)");
+
+    const [h] = await conn.query(
+      `SELECT * FROM sales WHERE id=:id AND company_id=:companyId LIMIT 1 FOR UPDATE`,
+      { id, companyId },
+    );
+    if (h.length === 0) throw new HttpError(404, "Not found");
+
+    const sale = h[0];
+    if (sale.status === "CANCELLED") throw new HttpError(400, "Already cancelled");
+    if (sale.status !== "CONFIRMED" && sale.status !== "SHIPPED") {
+      throw new HttpError(400, "ย้อน step ได้เฉพาะสถานะ CONFIRMED หรือ SHIPPED");
+    }
+    if (sale.receipt_no) {
+      throw new HttpError(400, "ออกใบเสร็จรับเงิน (RE) แล้ว กรุณายกเลิกใบเสร็จก่อน");
+    }
+    if (sale.tax_invoice_no) {
+      throw new HttpError(400, "ออกใบกำกับภาษี (TAX) แล้ว ไม่สามารถย้อน step ได้");
+    }
+
+    await conn.query(`SELECT id FROM sales_items WHERE sales_id=:id FOR UPDATE`, { id });
+
+    // Decide if this step rollback should restore stock.
+    const fromShipped = sale.status === "SHIPPED";
+    const fromConfirmed = sale.status === "CONFIRMED";
+    const restoreOnShipBack = fromShipped && sale.stock_deducted_at === "SHIPMENT";
+    const restoreOnConfirmBack =
+      fromConfirmed &&
+      (sale.stock_deducted_at === "INVOICE" || sale.stock_deducted_at === "MANUAL");
+    const shouldRestoreStock = restoreOnShipBack || restoreOnConfirmBack;
+
+    let stockReturned = false;
+    if (shouldRestoreStock) {
+      const [moves] = await conn.query(
+        `
+        SELECT m.id, m.lot_id, l.product_id, l.warehouse_id, m.qty, m.unit_cost
+        FROM stock_lot_moves m
+        JOIN stock_lots l ON l.id = m.lot_id
+        WHERE m.company_id=:companyId
+          AND m.ref_type='SALE'
+          AND m.ref_id=:refId
+        ORDER BY m.id DESC
+        FOR UPDATE
+        `,
+        { companyId, refId: id },
+      );
+
+      for (const mv of moves) {
+        const qty = Number(mv.qty);
+
+        await conn.query(
+          `UPDATE stock_lots SET qty_out = qty_out - :qty WHERE id=:lotId AND company_id=:companyId`,
+          { qty, lotId: mv.lot_id, companyId },
+        );
+
+        await conn.query(
+          `
+          UPDATE product_stock
+          SET qty = qty + :qty
+          WHERE company_id=:companyId AND product_id=:productId AND warehouse_id=:warehouseId
+          `,
+          { qty, companyId, productId: mv.product_id, warehouseId: mv.warehouse_id },
+        );
+
+        await conn.query(
+          `
+          INSERT INTO stock_moves (company_id, ref_type, ref_id, product_id, warehouse_id, move_type, qty, note, created_by)
+          VALUES (:company_id, 'SALE_STEP_BACK', :ref_id, :product_id, :warehouse_id, 'IN', :qty, :note, :created_by)
+          `,
+          {
+            company_id: companyId,
+            ref_id: id,
+            product_id: mv.product_id,
+            warehouse_id: mv.warehouse_id,
+            qty,
+            note: cancel_reason,
+            created_by: userId,
+          },
+        );
+
+        await conn.query(
+          `DELETE FROM stock_lot_moves WHERE id=:moveId`,
+          { moveId: mv.id },
+        );
+      }
+
+      // Drop the prior OUT marker rows so a future re-confirm/re-ship can deduct cleanly.
+      await conn.query(
+        `DELETE FROM stock_moves WHERE company_id=:companyId AND ref_type='SALE' AND ref_id=:refId AND move_type='OUT'`,
+        { companyId, refId: id },
+      );
+
+      // Reset cogs since stock is back.
+      await conn.query(
+        `UPDATE sales SET cogs_total=0 WHERE id=:id AND company_id=:companyId`,
+        { id, companyId },
+      );
+      await conn.query(
+        `UPDATE sales_items SET cogs_total=0 WHERE sales_id=:id`,
+        { id },
+      );
+
+      stockReturned = true;
+    }
+
+    let newStatus;
+    if (fromShipped) {
+      newStatus = "CONFIRMED";
+      await conn.query(
+        `
+        UPDATE sales
+        SET status='CONFIRMED',
+            delivery_no=NULL,
+            delivery_date=NULL,
+            shipped_at=NULL,
+            shipped_by=NULL
+        WHERE id=:id AND company_id=:companyId
+        `,
+        { id, companyId },
+      );
+    } else {
+      newStatus = "QUOTATION";
+      await conn.query(
+        `
+        UPDATE sales
+        SET status='QUOTATION',
+            invoice_no=NULL,
+            confirmed_at=NULL,
+            confirmed_by=NULL
+        WHERE id=:id AND company_id=:companyId
+        `,
+        { id, companyId },
+      );
+    }
+
+    await logAudit(
+      {
+        companyId,
+        userId,
+        action: "CANCEL_STEP",
+        entityType: "INVOICE",
+        entityId: id,
+        oldValues: { status: sale.status },
+        newValues: { status: newStatus, cancel_reason },
+      },
+      conn,
+    );
+
+    return {
+      ok: true,
+      prev_status: sale.status,
+      new_status: newStatus,
+      stock_returned: stockReturned,
+    };
+  });
+}
+
 export async function listSales(companyId, { q, limit, offset, status, has_receipt, has_invoice, sortKey, sortOrder }) {
   const kw = q ? `%${q}%` : null;
 

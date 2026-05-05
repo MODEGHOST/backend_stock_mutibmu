@@ -10,6 +10,7 @@ import {
   shipSale,
   approveSale,
   cancelSale,
+  cancelSaleStep,
   listSales,
   collectPayment,
   issueTaxInvoice,
@@ -272,6 +273,31 @@ router.post(
         .parse(req.body);
 
       res.json(await cancelSale(companyId, req.user.sub, id, body.reason));
+    } catch (e) {
+      next(e);
+    }
+  },
+);
+
+router.post(
+  "/invoice/:id/cancel-step",
+  auth,
+  requirePermission("sales.inv.manage"),
+  async (req, res, next) => {
+    try {
+      const companyId = req.user.company_id;
+      if (!companyId) return res.status(400).json({ message: "company_id required" });
+
+      const id = Number(req.params.id);
+
+      const body = z
+        .object({
+          reason: z.string().min(5).max(255),
+        })
+        .strict()
+        .parse(req.body);
+
+      res.json(await cancelSaleStep(companyId, req.user.sub, id, body.reason));
     } catch (e) {
       next(e);
     }
