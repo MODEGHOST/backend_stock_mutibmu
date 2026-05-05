@@ -435,9 +435,13 @@ export async function getSale(companyId, id) {
             v.code as customer_code,
             v.name as customer_name,
             v.address as customer_address,
-            v.tax_id as customer_tax_id
+            v.tax_id as customer_tax_id,
+            CONCAT(u_creator.first_name, ' ', u_creator.last_name) as creator_name,
+            CONCAT(u_seller.first_name, ' ', u_seller.last_name) as seller_name
      FROM sales s
      LEFT JOIN vendors v ON v.id = s.customer_id AND v.company_id = s.company_id
+     LEFT JOIN users u_creator ON u_creator.id = s.created_by
+     LEFT JOIN users u_seller ON u_seller.id = s.seller_id
      WHERE s.id=:id AND s.company_id=:companyId
      LIMIT 1`,
     { id, companyId },
