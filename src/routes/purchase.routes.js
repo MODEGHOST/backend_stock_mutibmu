@@ -21,6 +21,8 @@ import {
   listBill,
   setBillPaid,
 } from "../services/purchase.service.js";
+import { peekNextDocNo } from "../services/documentNo.service.js";
+import { pool } from "../config/db.js";
 
 const router = Router();
 
@@ -102,6 +104,27 @@ router.post(
         .parse(req.body);
 
       res.json(await createBill(companyId, req.user.sub, body));
+    } catch (e) {
+      next(e);
+    }
+  },
+);
+
+router.get(
+  "/bill/next-no",
+  auth,
+  requirePermission("purchase.bill.manage"),
+  async (req, res, next) => {
+    try {
+      const companyId = req.user.company_id;
+      if (!companyId)
+        return res.status(400).json({ message: "company_id required" });
+
+      const issueDate = req.query.issue_date || new Date();
+      const bill_no = await peekNextDocNo(pool, companyId, "BL", issueDate);
+      const tax_invoice_no = await peekNextDocNo(pool, companyId, "Tax", issueDate);
+      
+      res.json({ bill_no, tax_invoice_no });
     } catch (e) {
       next(e);
     }
@@ -243,6 +266,25 @@ router.post(
 // ✅ รองรับ 2 โหมด
 // 1) legacy: GRN ผูก PO/ป้อนเอง
 // 2) recommended: GRN ผูก BILL (ส่ง bill_id) + ใส่ bill_item_id เพื่อ partial receive
+router.get(
+  "/grn/next-no",
+  auth,
+  requirePermission("purchase.grn.manage"),
+  async (req, res, next) => {
+    try {
+      const companyId = req.user.company_id;
+      if (!companyId)
+        return res.status(400).json({ message: "company_id required" });
+
+      const issueDate = req.query.issue_date || new Date();
+      const grn_no = await peekNextDocNo(pool, companyId, "GRN", issueDate);
+      res.json({ grn_no });
+    } catch (e) {
+      next(e);
+    }
+  },
+);
+
 router.post(
   "/grn",
   auth,
@@ -414,6 +456,25 @@ router.post(
         .parse(req.body);
 
       res.json(await createPo(companyId, req.user.sub, body));
+    } catch (e) {
+      next(e);
+    }
+  },
+);
+
+router.get(
+  "/po/next-no",
+  auth,
+  requirePermission("purchase.po.manage"),
+  async (req, res, next) => {
+    try {
+      const companyId = req.user.company_id;
+      if (!companyId)
+        return res.status(400).json({ message: "company_id required" });
+
+      const issueDate = req.query.issue_date || new Date();
+      const po_no = await peekNextDocNo(pool, companyId, "PO", issueDate);
+      res.json({ po_no });
     } catch (e) {
       next(e);
     }
