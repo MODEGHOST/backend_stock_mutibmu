@@ -73,6 +73,7 @@ router.get(
     try {
       const companyId = req.user.company_id;
       if (!companyId) return res.status(400).json({ message: "company_id required" });
+
       res.json(await listSalesSellers(companyId));
     } catch (e) {
       next(e);

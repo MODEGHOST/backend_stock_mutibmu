@@ -24,6 +24,8 @@ import {
   listBill,
   setBillPaid,
 } from "../services/purchase.service.js";
+import { peekNextDocNo } from "../services/documentNo.service.js";
+import { pool } from "../config/db.js";
 
 const router = Router();
 
@@ -471,6 +473,25 @@ router.post(
         .parse(req.body);
 
       res.json(await createPo(companyId, req.user.sub, body));
+    } catch (e) {
+      next(e);
+    }
+  },
+);
+
+router.get(
+  "/po/next-no",
+  auth,
+  requirePermission("purchase.po.manage"),
+  async (req, res, next) => {
+    try {
+      const companyId = req.user.company_id;
+      if (!companyId)
+        return res.status(400).json({ message: "company_id required" });
+
+      const issueDate = req.query.issue_date || new Date();
+      const po_no = await peekNextDocNo(pool, companyId, "PO", issueDate);
+      res.json({ po_no });
     } catch (e) {
       next(e);
     }

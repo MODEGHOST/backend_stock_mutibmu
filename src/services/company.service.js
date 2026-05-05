@@ -3,7 +3,7 @@ import { pool as db } from "../config/db.js";
 // Get Company Settings & Doc Configs
 export async function getCompanySettings(companyId) {
   const [rows] = await db.query(
-    "SELECT id, name, tax_id, address, province, district, sub_district, zip_code, phone, email, is_active FROM companies WHERE id = ?",
+    "SELECT id, name, tax_id, address, province, district, sub_district, zip_code, phone, email, is_active, logo, is_vat_registered FROM companies WHERE id = ?",
     [companyId]
   );
   if (rows.length === 0) return null;
@@ -20,11 +20,11 @@ export async function getCompanySettings(companyId) {
 // Update Company Info
 export async function updateCompany(companyId, data) {
   await db.query(
-    "UPDATE companies SET name=?, tax_id=?, address=?, province=?, district=?, sub_district=?, zip_code=?, phone=?, email=? WHERE id=?",
+    "UPDATE companies SET name=?, tax_id=?, address=?, province=?, district=?, sub_district=?, zip_code=?, phone=?, email=?, logo=?, is_vat_registered=? WHERE id=?",
     [
       data.name, data.tax_id, data.address,
       data.province, data.district, data.sub_district, data.zip_code,
-      data.phone, data.email, companyId
+      data.phone, data.email, data.logo || null, data.is_vat_registered !== undefined ? data.is_vat_registered : 0, companyId
     ]
   );
   return getCompanySettings(companyId);

@@ -906,7 +906,10 @@ export async function createBill(companyId, userId, data) {
 
 export async function getBill(companyId, id) {
   const [h] = await pool.query(
-    `SELECT * FROM purchase_bills WHERE id=:id AND company_id=:companyId LIMIT 1`,
+    `SELECT pb.*, CONCAT(u.first_name, ' ', u.last_name) as creator_name 
+     FROM purchase_bills pb 
+     LEFT JOIN users u ON u.id = pb.created_by 
+     WHERE pb.id=:id AND pb.company_id=:companyId LIMIT 1`,
     { id, companyId },
   );
   if (h.length === 0) throw new HttpError(404, "Not found");
@@ -2211,7 +2214,9 @@ export async function getPo(companyId, id) {
 
       w.name AS warehouse_name,
       w.location AS warehouse_location,
-      w.description AS warehouse_description
+      w.description AS warehouse_description,
+
+      CONCAT(u.first_name, ' ', u.last_name) AS creator_name
 
     FROM purchase_orders p
     JOIN vendors v 
@@ -2221,6 +2226,9 @@ export async function getPo(companyId, id) {
     JOIN warehouses w 
       ON w.id = p.warehouse_id 
       AND w.company_id = p.company_id
+
+    LEFT JOIN users u
+      ON u.id = p.created_by
 
     WHERE p.id=:id 
       AND p.company_id=:companyId
