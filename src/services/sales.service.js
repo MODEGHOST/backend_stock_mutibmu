@@ -924,7 +924,8 @@ export async function cancelSale(companyId, userId, id, reason) {
 // Roll back the most recent stage by 1 step.
 //   SHIPPED  -> CONFIRMED (clear delivery info; restore stock if SHIPMENT mode)
 //   CONFIRMED -> QUOTATION (clear invoice info; restore stock if INVOICE/MANUAL mode)
-// Refuses if a receipt or tax invoice has been issued, or if status is QUOTATION/CANCELLED.
+// Any tax invoice issued in/before this stage is cleared too.
+// Refuses if a receipt has been issued (cash already collected) or status is QUOTATION/CANCELLED.
 export async function cancelSaleStep(companyId, userId, id, reason) {
   return await withTx(async (conn) => {
     const cancel_reason = (reason || "").toString().trim();
@@ -943,9 +944,6 @@ export async function cancelSaleStep(companyId, userId, id, reason) {
     }
     if (sale.receipt_no) {
       throw new HttpError(400, "ออกใบเสร็จรับเงิน (RE) แล้ว กรุณายกเลิกใบเสร็จก่อน");
-    }
-    if (sale.tax_invoice_no) {
-      throw new HttpError(400, "ออกใบกำกับภาษี (TAX) แล้ว ไม่สามารถย้อน step ได้");
     }
 
     await conn.query(`SELECT id FROM sales_items WHERE sales_id=:id FOR UPDATE`, { id });
@@ -1033,6 +1031,7 @@ export async function cancelSaleStep(companyId, userId, id, reason) {
       stockReturned = true;
     }
 
+    const taxCleared = !!sale.tax_invoice_no;
     let newStatus;
     if (fromShipped) {
       newStatus = "CONFIRMED";
@@ -1043,7 +1042,9 @@ export async function cancelSaleStep(companyId, userId, id, reason) {
             delivery_no=NULL,
             delivery_date=NULL,
             shipped_at=NULL,
-            shipped_by=NULL
+            shipped_by=NULL,
+            tax_invoice_no=NULL,
+            tax_invoice_date=NULL
         WHERE id=:id AND company_id=:companyId
         `,
         { id, companyId },
@@ -1056,7 +1057,9 @@ export async function cancelSaleStep(companyId, userId, id, reason) {
         SET status='QUOTATION',
             invoice_no=NULL,
             confirmed_at=NULL,
-            confirmed_by=NULL
+            confirmed_by=NULL,
+            tax_invoice_no=NULL,
+            tax_invoice_date=NULL
         WHERE id=:id AND company_id=:companyId
         `,
         { id, companyId },
@@ -1070,8 +1073,11 @@ export async function cancelSaleStep(companyId, userId, id, reason) {
         action: "CANCEL_STEP",
         entityType: "INVOICE",
         entityId: id,
-        oldValues: { status: sale.status },
-        newValues: { status: newStatus, cancel_reason },
+        oldValues: {
+          status: sale.status,
+          tax_invoice_no: sale.tax_invoice_no,
+        },
+        newValues: { status: newStatus, cancel_reason, tax_cleared: taxCleared },
       },
       conn,
     );
@@ -1081,6 +1087,7 @@ export async function cancelSaleStep(companyId, userId, id, reason) {
       prev_status: sale.status,
       new_status: newStatus,
       stock_returned: stockReturned,
+      tax_cleared: taxCleared,
     };
   });
 }
