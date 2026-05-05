@@ -64,6 +64,27 @@ const CreateSaleSchema = z
   .strict();
 
 router.get(
+  "/sellers",
+  auth,
+  requirePermission("sales.inv.manage"),
+  async (req, res, next) => {
+    try {
+      const companyId = req.user.company_id;
+      if (!companyId) return res.status(400).json({ message: "company_id required" });
+
+      const { pool } = await import("../config/db.js");
+      const [users] = await pool.query(
+        `SELECT id, first_name, last_name, email, display_name FROM users WHERE company_id=:companyId AND is_active=1`,
+        { companyId }
+      );
+      res.json(users);
+    } catch (e) {
+      next(e);
+    }
+  }
+);
+
+router.get(
   "/invoice",
   auth,
   requirePermission("sales.inv.manage"),
