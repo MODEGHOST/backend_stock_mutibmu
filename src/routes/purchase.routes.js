@@ -585,7 +585,11 @@ router.get(
       const pageSizeRaw = Number(req.query.pageSize ?? 20) || 20;
       const pageSize = Math.min(100, Math.max(1, pageSizeRaw));
 
-      res.json(await listPo(companyId, { q, status, page, pageSize }));
+      const vendorIdRaw = Number(req.query.vendor_id);
+      const vendor_id = Number.isFinite(vendorIdRaw) && vendorIdRaw > 0 ? vendorIdRaw : undefined;
+      const for_bill = req.query.for_bill === "true" || req.query.for_bill === "1";
+
+      res.json(await listPo(companyId, { q, status, page, pageSize, vendor_id, for_bill }));
     } catch (e) {
       next(e);
     }

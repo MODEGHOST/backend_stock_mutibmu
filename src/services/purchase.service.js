@@ -2346,16 +2346,37 @@ export async function listPo(companyId, opts = {}) {
   );
   const offset = (page - 1) * pageSize;
   const needle = `%${q}%`;
+  const vendorId = Number(opts.vendor_id ?? 0) || null;
+  const forBill = !!opts.for_bill;
 
   const where = `
     p.company_id = :companyId
     AND (:status = '' OR p.status = :status)
+    AND (:vendorId IS NULL OR p.vendor_id = :vendorId)
     AND (
       :q = '' OR
       p.po_no LIKE :needle OR
       v.name LIKE :needle OR
       w.name LIKE :needle
     )
+    ${
+      forBill
+        ? `
+      AND NOT EXISTS (
+        SELECT 1 FROM purchase_bills pb
+        WHERE pb.company_id = p.company_id
+          AND pb.po_id = p.id
+          AND pb.status <> 'CANCELLED'
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM goods_receipts gr
+        WHERE gr.company_id = p.company_id
+          AND gr.po_id = p.id
+          AND gr.status <> 'CANCELLED'
+      )
+    `
+        : ""
+    }
   `;
 
   const [cntRows] = await pool.query(
@@ -2366,7 +2387,7 @@ export async function listPo(companyId, opts = {}) {
     JOIN warehouses w ON w.id = p.warehouse_id AND w.company_id = p.company_id
     WHERE ${where}
     `,
-    { companyId, q, needle, status },
+    { companyId, q, needle, status, vendorId },
   );
 
   const total = Number(cntRows?.[0]?.total ?? 0);
@@ -2441,7 +2462,7 @@ export async function listPo(companyId, opts = {}) {
     ORDER BY p.id DESC
     LIMIT :limit OFFSET :offset
     `,
-    { companyId, q, needle, status, limit: pageSize, offset },
+    { companyId, q, needle, status, vendorId, limit: pageSize, offset },
   );
 
   return {
